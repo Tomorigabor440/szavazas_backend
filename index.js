@@ -39,6 +39,20 @@ app.use(cors({
     credentials: true
 }))
 
+///middleware
+function auth(req, res, next) {
+    const token = req.cookies[COOKIE_NAME];
+    if (!token) {
+        return res.status(409).json({ message: "Nincs bejelentkezes" })
+    }
+    try {
+        req.user = jwt.verify(token, JWT_SECRET)
+        next();
+    } catch (error) {
+        return res.status(410).json({ message: "nincs érvenyes token" })
+    }
+}
+
 //végpontok
 app.post('/regisztracio', async (req, res) => {
     const { email, felhasznalonev, jelszo, admin } = req.body;
@@ -56,7 +70,7 @@ app.post('/regisztracio', async (req, res) => {
             return res.status(402).json({ message: "email vagy felhszanalonev foglalt" })
         }
         const hash = await bcrypt.hash(jelszo, 10);
-        const regisztracioSQL = 'INSERT INTO felhasznalok (email, felhasznalonev, jelszo. admin)VALUES (?,?,?,?)'
+        const regisztracioSQL = 'INSERT INTO felhasznalok (email, felhasznalonev, jelszo, admin)VALUES (?,?,?,?)'
         const [result] = await db.query(regisztracioSQL, [email, felhasznalonev, hash, admin])
 
         return res.status(200).json({
@@ -101,26 +115,90 @@ app.post('/belepes', async (req, res) => {
         }
 
         const ok = bcrypt.compare(jelszo, hashJelszo)
-        if(!ok){
-            return res.status(403).json({message: "rossz jelszot adtál meg"})
-        }     
-            const token = jwt.sign(
-                { id: user.id, email: user.email, felhasznalonev: user.felhasznalonev, admin: user.admin },
-                JWT_SECRET,
-                { expiresIn: JWT_EXPIRES_IN }
+        if (!ok) {
+            return res.status(403).json({ message: "rossz jelszot adtál meg" })
+        }
+        const token = jwt.sign(
+            { id: user.id, email: user.email, felhasznalonev: user.felhasznalonev, admin: user.admin },
+            JWT_SECRET,
+            { expiresIn: JWT_EXPIRES_IN }
         )
-            
+
         res.cookie(COOKIE_NAME, token, COOKIE_OPTS)
-        res.status(200).json({message: "Sikeres belépés"})
-        
+        res.status(200).json({ message: "Sikeres belépés" })
+
     } catch (error) {
         console.log(error);
         return res.status(500).json({ message: "szerverhiba" })
     }
 })
+app.post('/kijelentkezes', auth, async (req, res) => {
+    res.clearCookie(COOKIE_NAME, { path: '/' });
+    res.status(200).json({ message: "sikeres kijelentkezes" })
+})
+
+
 
 app.get('/adataim', auth, async (req, res) => {
+    res.status(200).json(req.user)
+})
 
+app.put('/email', auth, async (req, res) => {
+    const { ujEmail } = req.body;
+    if (!ujEmail) {
+        return res.status(401).json({ message: "az uj email megadasa kotelezo" })
+    }
+    const isValid = await emailValidator(ujEmail)
+    if (!isValid) {
+        return res.status(402).json({ message: "nem valos emailt adtal meg" })
+    }
+    try {
+        const sql1 = 'SELECT * FROM felhasznalok WHERE email=?'
+        const [result] = await db.query(sql1, [ujEmail])
+        if (result.length) {
+            return res.status(402).json({ message: "az email cim mar foglalt" })
+        }
+        const sql2 = 'UPDATE felhasznalok SET email=? WHERE id=?'
+        await db.query(sql2, [ujEmail, req.user.id])
+        return res.status(200).json({ message: "sikeres modosult a email" })
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({ message: "szerverhiba" })
+    }
+})
+
+
+app.put('/felhasznalonev', auth, async (req, res) => {
+    const { ujfelhasznalonev } = req.body;
+    if (!ujfelhasznalonev) {
+        return res.status(401).json({ message: "az uj felhasznalonev megadasa kotelezo" })
+    }
+    try {
+        const sql1 = 'SELECT * FROM felhasznalok WHERE felhasznalonev=?'
+        const [result] = await db.query(sql1, [ujfelhasznalonev])
+        if (result.length) {
+            return res.status(402).json({ message: "az felhasznalonev cim mar foglalt" })
+        }
+        const sql2 = 'UPDATE felhasznalok SET felhasznalonev=? WHERE id=?'
+        await db.query(sql2, [ujfelhasznalonev, req.user.id])
+        return res.status(200).json({ message: "sikeres modosult a felhasznalonev" })
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({ message: "szerverhiba" })
+    }
+})
+
+app.delete('/fiokom',auth, async (req, res)=>{
+    try {
+        const sql='DELETE FROM felhasznalok WHERE id=?'
+        await db.query(sql,[req.user.id])
+        res.clearCookie(COOKIE_NAME, {path: '/'})
+        res.status(200).json({message: "Sikeres fioktolrés"})
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({message: "szerverhiba"})
+    }
+    
 })
 
 //szerver elinditas
